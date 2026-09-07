@@ -136,7 +136,15 @@ function SearchBar({ mapRef }: { mapRef: RefObject<MapLibreMap | null> }) {
   }
 
   return (
-    <div style={{ position: 'absolute', top: 16, left: 16, maxWidth: 320 }}>
+    <div
+      style={{
+        position: 'absolute',
+        top: 16,
+        left: 16,
+        maxWidth: 320,
+        fontFamily: "'Public Sans', system-ui, sans-serif",
+      }}
+    >
       <style>{`
         .search-bar-input {
           flex: 1;
@@ -146,6 +154,7 @@ function SearchBar({ mapRef }: { mapRef: RefObject<MapLibreMap | null> }) {
           background: ${COLOR_BACKGROUND};
           color: ${COLOR_TEXT};
           outline: none;
+          font-family: inherit;
         }
         .search-bar-input:focus {
           border-color: ${COLOR_ACCENT};
@@ -158,6 +167,9 @@ function SearchBar({ mapRef }: { mapRef: RefObject<MapLibreMap | null> }) {
           background: ${COLOR_BACKGROUND};
           color: ${COLOR_TEXT};
           cursor: pointer;
+          /* Public Sans is scoped to the input/dropdown only for now, so
+             the button keeps the app's default font stack. */
+          font-family: system-ui, sans-serif;
         }
         .search-bar-button:hover:not(:disabled) {
           background: ${COLOR_HOVER};

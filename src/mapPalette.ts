@@ -1,10 +1,17 @@
 import type { StyleSpecification } from 'maplibre-gl'
 
-export const COLOR_LAND = '#d8caa9'
-export const COLOR_BUILDINGS = '#d0ba98'
+export const COLOR_LAND = '#e8dfc6'
+// Same hue/saturation as the original buildings tone, just 8% darker —
+// against the lightened land color, the original value read as barely
+// distinguishable from the background (thin outline aside).
+export const COLOR_BUILDINGS = '#c3a77c'
 export const COLOR_WATER = '#aeb2a6'
 export const COLOR_ROADS = '#b8b6b0'
 export const COLOR_LABELS = '#8d8079'
+// Major roads reuse the darkest palette tone (rather than a new 6th
+// color) so highways read with real contrast against the land color,
+// while local/residential streets stay on the muted COLOR_ROADS grey.
+export const COLOR_MAJOR_ROADS = COLOR_LABELS
 
 // Land/background fills also absorb landcover/landuse sub-fills with no
 // dedicated slot in the 5-color scheme — they're already near-identical
@@ -24,15 +31,11 @@ const LAND_FILL_LAYERS = [
 
 const WATER_LAYERS = ['water', 'waterway']
 
+// highway_minor covers class [minor, service, track] — local/residential
+// streets, kept on the muted roads grey.
 const ROAD_LAYERS = [
-  'tunnel_motorway_casing',
   'highway_path',
   'highway_minor',
-  'highway_major_casing',
-  'highway_major_subtle',
-  'highway_motorway_casing',
-  'highway_motorway_subtle',
-  'highway_motorway_bridge_casing',
   'aeroway-taxiway',
   'aeroway-runway-casing',
   'railway_transit',
@@ -41,6 +44,19 @@ const ROAD_LAYERS = [
   'boundary_3',
   'boundary_2',
   'boundary_disputed',
+]
+
+// highway_major_* covers class [primary, secondary, tertiary, trunk];
+// highway_motorway_*/tunnel_motorway_* covers class motorway. Both are
+// "major roads" per the user's distinction and get the higher-contrast
+// color instead of the muted roads grey.
+const MAJOR_ROAD_LAYERS = [
+  'highway_major_casing',
+  'highway_major_subtle',
+  'highway_motorway_casing',
+  'highway_motorway_subtle',
+  'highway_motorway_bridge_casing',
+  'tunnel_motorway_casing',
 ]
 
 // Casing+inner road pairs use a darker casing with a lighter inner line so
@@ -89,6 +105,15 @@ function withOpacity(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`
 }
 
+// A few "subtle" road layers (shown only at low zoom) use a semi-transparent
+// original color to fade in gently — preserve that alpha on the new color
+// instead of flattening it to fully opaque.
+function recolorRoadLine(original: unknown, color: string): string {
+  if (typeof original === 'string' && original.includes('0.69')) return withOpacity(color, 0.69)
+  if (typeof original === 'string' && original.includes('0.53')) return withOpacity(color, 0.53)
+  return color
+}
+
 /**
  * Recolors a style's layers in place per the warm-neutral palette above,
  * preserving each layer's original paint-property alpha where it had one.
@@ -116,16 +141,12 @@ export function applyPalette(style: StyleSpecification): StyleSpecification {
       if ('line-color' in paint) paint['line-color'] = COLOR_WATER
     }
 
-    if (ROAD_LAYERS.includes(layer.id)) {
-      if ('line-color' in paint) {
-        const original = paint['line-color']
-        paint['line-color'] =
-          typeof original === 'string' && original.includes('0.69')
-            ? withOpacity(COLOR_ROADS, 0.69)
-            : typeof original === 'string' && original.includes('0.53')
-              ? withOpacity(COLOR_ROADS, 0.53)
-              : COLOR_ROADS
-      }
+    if (ROAD_LAYERS.includes(layer.id) && 'line-color' in paint) {
+      paint['line-color'] = recolorRoadLine(paint['line-color'], COLOR_ROADS)
+    }
+
+    if (MAJOR_ROAD_LAYERS.includes(layer.id) && 'line-color' in paint) {
+      paint['line-color'] = recolorRoadLine(paint['line-color'], COLOR_MAJOR_ROADS)
     }
 
     if (ROAD_INNER_HIGHLIGHT_LAYERS.includes(layer.id) || RAIL_DASH_LAYERS.includes(layer.id)) {
