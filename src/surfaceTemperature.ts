@@ -1,8 +1,8 @@
 import { Popup, type Map as MapLibreMap, type MapMouseEvent } from 'maplibre-gl'
 
-const METADATA_URL = '/layers/surface-temperature.json'
-const PNG_URL = '/layers/surface-temperature.png'
-const DATA_PNG_URL = '/layers/surface-temperature-data.png'
+const METADATA_URL = `${import.meta.env.BASE_URL}layers/surface-temperature.json`
+const PNG_URL = `${import.meta.env.BASE_URL}layers/surface-temperature.png`
+const DATA_PNG_URL = `${import.meta.env.BASE_URL}layers/surface-temperature-data.png`
 const SOURCE_ID = 'surface-temperature'
 const LAYER_ID = 'surface-temperature'
 
