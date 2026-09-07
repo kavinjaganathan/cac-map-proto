@@ -17,8 +17,18 @@ visible holes, and a 3x3 median filter removes per-pixel thermal-sensor
 noise that's otherwise visible as salt-and-pepper "static" even on
 perfectly clear pixels.
 
+A second PNG (surface-temperature-data.png) encodes the actual Fahrenheit
+values (not colors) for the click-to-inspect feature — 16 bits packed
+into the R+G channels over a fixed scale, alpha 0/255 marking no-data
+(true nodata or cloud/shadow/cirrus — those are filled with an
+interpolated value for the color display, but that's not a real
+measurement, so the inspect tool should say "no data" rather than show
+it as one). Downsampled by DATA_DOWNSAMPLE_STRIDE to keep the file small
+— see that constant for why.
+
 Usage: python3 scripts/fetch_landsat_lst.py
 Output: public/layers/surface-temperature.png
+        public/layers/surface-temperature-data.png
         public/layers/surface-temperature.json
 """
 
@@ -57,13 +67,43 @@ BBOX = (-97.65, 32.55, -96.35, 33.47)
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "public" / "layers"
 OUT_PNG = OUT_DIR / "surface-temperature.png"
+OUT_DATA_PNG = OUT_DIR / "surface-temperature-data.png"
 OUT_JSON = OUT_DIR / "surface-temperature.json"
+
+# A full-resolution data PNG (same grid as the color image) compresses to
+# ~22MB and fully rewrites on every regen — real repo bloat for a click
+# tool. Stride 8 (~230m cells) is still finer than the ~90m effective
+# resolution the median filter already implies, at ~500KB.
+DATA_DOWNSAMPLE_STRIDE = 8
+DATA_SCALE_MIN_F = -40.0
+DATA_SCALE_MAX_F = 200.0
 
 
 def dn_to_fahrenheit(dn: np.ndarray) -> np.ndarray:
     kelvin = dn.astype("float64") * 0.00341802 + 149.0
     celsius = kelvin - 273.15
     return celsius * 9.0 / 5.0 + 32.0
+
+
+def write_data_png(path, fahrenheit: np.ndarray, good: np.ndarray) -> tuple[int, int]:
+    """Encodes real Fahrenheit values (not colors) into a PNG for the
+    click-to-inspect feature: 16 bits packed into R+G over a fixed scale,
+    alpha 0/255 marking no-data. Returns (width, height) of the grid."""
+    small_f = fahrenheit[::DATA_DOWNSAMPLE_STRIDE, ::DATA_DOWNSAMPLE_STRIDE]
+    small_good = good[::DATA_DOWNSAMPLE_STRIDE, ::DATA_DOWNSAMPLE_STRIDE]
+
+    clipped = np.clip(small_f, DATA_SCALE_MIN_F, DATA_SCALE_MAX_F)
+    q16 = np.round(
+        (clipped - DATA_SCALE_MIN_F) / (DATA_SCALE_MAX_F - DATA_SCALE_MIN_F) * 65535
+    ).astype(np.uint16)
+    r = (q16 >> 8).astype(np.uint8)
+    g = (q16 & 0xFF).astype(np.uint8)
+    b = np.zeros_like(r)
+    a = np.where(small_good, 255, 0).astype(np.uint8)
+
+    plt.imsave(path, np.dstack([r, g, b, a]))
+    height, width = small_f.shape
+    return width, height
 
 
 def point_in_polygon(point, ring):
@@ -174,6 +214,13 @@ def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     plt.imsave(OUT_PNG, rgba)
 
+    # Water is a real measurement (only excluded from the percentile stats
+    # above, not from the data itself) so it's "good" for the inspect tool;
+    # cloud/shadow/cirrus pixels were only filled for the color display and
+    # aren't real readings, so they stay excluded here.
+    good_for_inspect = valid & ~is_bad
+    data_width, data_height = write_data_png(OUT_DATA_PNG, fahrenheit_smoothed, good_for_inspect)
+
     metadata = {
         "west": out_west,
         "south": out_south,
@@ -182,10 +229,14 @@ def main():
         "minF": round(min_f, 1),
         "maxF": round(max_f, 1),
         "sceneDate": item.properties["datetime"],
+        "dataWidth": data_width,
+        "dataHeight": data_height,
+        "dataScaleMinF": DATA_SCALE_MIN_F,
+        "dataScaleMaxF": DATA_SCALE_MAX_F,
     }
     OUT_JSON.write_text(json.dumps(metadata, indent=2))
 
-    print(f"Wrote {OUT_PNG} and {OUT_JSON}")
+    print(f"Wrote {OUT_PNG}, {OUT_DATA_PNG} ({data_width}x{data_height}), and {OUT_JSON}")
     print(f"Range (land, 5th-95th percentile): {metadata['minF']}F - {metadata['maxF']}F")
 
 

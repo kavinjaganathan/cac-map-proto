@@ -4,6 +4,8 @@ import { LAYER_OPTIONS } from './layers'
 import {
   addSurfaceTemperatureLayer,
   removeSurfaceTemperatureLayer,
+  loadTemperatureGrid,
+  enableTemperatureInspect,
   type SurfaceTemperatureMetadata,
 } from './surfaceTemperature'
 
@@ -31,11 +33,19 @@ function LayerPanel({ mapRef }: { mapRef: RefObject<MapLibreMap | null> }) {
 
     if (enabled[SURFACE_TEMPERATURE_ID]) {
       let cancelled = false
+      let disableInspect: (() => void) | null = null
+
       addSurfaceTemperatureLayer(map).then((metadata) => {
-        if (!cancelled) setSurfaceTempMeta(metadata)
+        if (cancelled) return
+        setSurfaceTempMeta(metadata)
+        loadTemperatureGrid(metadata).then((grid) => {
+          if (!cancelled) disableInspect = enableTemperatureInspect(map, grid)
+        })
       })
+
       return () => {
         cancelled = true
+        disableInspect?.()
         removeSurfaceTemperatureLayer(map)
         setSurfaceTempMeta(null)
       }

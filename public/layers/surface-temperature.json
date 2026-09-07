@@ -5,5 +5,9 @@
   "north": 33.49107272654334,
   "minF": 101.3,
   "maxF": 129.4,
-  "sceneDate": "2026-08-19T17:01:57.170603Z"
+  "sceneDate": "2026-08-19T17:01:57.170603Z",
+  "dataWidth": 515,
+  "dataHeight": 435,
+  "dataScaleMinF": -40.0,
+  "dataScaleMaxF": 200.0
 }
