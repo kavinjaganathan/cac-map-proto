@@ -1,8 +1,15 @@
 """
 Fetches a recent, cloud-free Landsat 8/9 Collection 2 Level-2 scene over
-Frisco, TX from Microsoft Planetary Computer's STAC API, converts the
-surface temperature band (ST_B10) to Fahrenheit, colorizes it, and writes
-a PNG + bounds/metadata JSON for the web app to load as a map overlay.
+the DFW metro area from Microsoft Planetary Computer's STAC API, converts
+the surface temperature band (ST_B10) to Fahrenheit, colorizes it, and
+writes a PNG + bounds/metadata JSON for the web app to load as a map
+overlay.
+
+The color scale is stretched to the 5th-95th percentile of land pixels
+(water excluded via the QA_PIXEL water bit) rather than the raw min/max —
+water and rare hot/cold outliers otherwise compress the real ~30F of land
+variation into a sliver of the colormap, making everything look like one
+flat color.
 
 Usage: python3 scripts/fetch_landsat_lst.py
 Output: public/layers/surface-temperature.png
@@ -25,6 +32,7 @@ from rasterio.windows import from_bounds
 STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 COLLECTION = "landsat-c2-l2"
 ST_B10_ASSET = "lwir11"  # Planetary Computer's key for the ST_B10 band
+QA_PIXEL_ASSET = "qa_pixel"  # bit 7 = water, used to exclude water from the stretch
 COLORMAP = "inferno"  # swap to "magma" if preferred
 
 # west, south, east, north — Collin/Denton/Dallas/Tarrant counties (DFW metro)
@@ -97,9 +105,8 @@ def main():
           f"cloud cover {item.properties['eo:cloud_cover']}%)")
 
     signed = planetary_computer.sign(item)
-    href = signed.assets[ST_B10_ASSET].href
 
-    with rasterio.open(href) as src:
+    with rasterio.open(signed.assets[ST_B10_ASSET].href) as src:
         west, south, east, north = transform_bounds("EPSG:4326", src.crs, *BBOX)
         window = from_bounds(west, south, east, north, transform=src.transform)
         window = window.round_offsets().round_lengths()
@@ -113,11 +120,16 @@ def main():
             src.crs, "EPSG:4326", *actual_bounds
         )
 
-    fahrenheit = dn_to_fahrenheit(dn)
-    min_f = float(fahrenheit[valid].min())
-    max_f = float(fahrenheit[valid].max())
+    with rasterio.open(signed.assets[QA_PIXEL_ASSET].href) as src:
+        qa = src.read(1, window=window)
+    is_water = ((qa >> 7) & 1).astype(bool)  # QA_PIXEL bit 7 = water
 
-    norm = Normalize(vmin=min_f, vmax=max_f)
+    fahrenheit = dn_to_fahrenheit(dn)
+    land_valid = valid & ~is_water
+    min_f, max_f = np.percentile(fahrenheit[land_valid], [5, 95])
+    min_f, max_f = float(min_f), float(max_f)
+
+    norm = Normalize(vmin=min_f, vmax=max_f, clip=True)
     cmap = plt.get_cmap(COLORMAP)
     rgba = cmap(norm(fahrenheit))
     rgba[..., 3] = np.where(valid, 1.0, 0.0)  # transparent nodata pixels
@@ -137,7 +149,7 @@ def main():
     OUT_JSON.write_text(json.dumps(metadata, indent=2))
 
     print(f"Wrote {OUT_PNG} and {OUT_JSON}")
-    print(f"Range: {metadata['minF']}F - {metadata['maxF']}F")
+    print(f"Range (land, 5th-95th percentile): {metadata['minF']}F - {metadata['maxF']}F")
 
 
 if __name__ == "__main__":
