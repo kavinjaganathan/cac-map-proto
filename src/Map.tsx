@@ -1,12 +1,13 @@
 import { useEffect, useRef } from 'react'
-import { Map as MapLibreMap, type StyleSpecification } from 'maplibre-gl'
+import { Map as MapLibreMap, NavigationControl, ScaleControl, type StyleSpecification } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import SearchBar from './SearchBar'
+import LayerPanel from './LayerPanel'
+import { HomeControl } from './HomeControl'
 import { applyPalette } from './mapPalette'
+import { USA_CENTER, USA_ZOOM } from './mapDefaults'
 
 const STYLE_URL = 'https://tiles.openfreemap.org/styles/positron'
-const USA_CENTER: [number, number] = [-98.35, 39.5]
-const USA_ZOOM = 3.8
 
 function Map() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -27,6 +28,9 @@ function Map() {
           center: USA_CENTER,
           zoom: USA_ZOOM,
         })
+        map.addControl(new NavigationControl(), 'bottom-right')
+        map.addControl(new HomeControl(), 'bottom-right')
+        map.addControl(new ScaleControl(), 'bottom-left')
         mapRef.current = map
       })
 
@@ -41,6 +45,7 @@ function Map() {
     <div style={{ position: 'relative', width: '100vw', height: '100vh' }}>
       <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
       <SearchBar mapRef={mapRef} />
+      <LayerPanel />
     </div>
   )
 }
