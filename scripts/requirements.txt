@@ -3,3 +3,4 @@ planetary-computer
 rasterio
 numpy
 matplotlib
+scipy

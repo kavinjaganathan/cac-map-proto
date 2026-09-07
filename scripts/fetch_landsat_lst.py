@@ -6,10 +6,16 @@ writes a PNG + bounds/metadata JSON for the web app to load as a map
 overlay.
 
 The color scale is stretched to the 5th-95th percentile of land pixels
-(water excluded via the QA_PIXEL water bit) rather than the raw min/max —
-water and rare hot/cold outliers otherwise compress the real ~30F of land
-variation into a sliver of the colormap, making everything look like one
-flat color.
+(water and cloud/shadow/cirrus excluded via QA_PIXEL, see BAD_QA_BITS)
+rather than the raw min/max — water and contaminated/outlier pixels
+otherwise compress the real ~30F of land variation into a sliver of the
+colormap, making everything look like one flat color.
+
+Cloud/shadow/cirrus-flagged pixels are filled from their nearest good
+neighbor (a standard sparse-gap inpainting trick) rather than left as
+visible holes, and a 3x3 median filter removes per-pixel thermal-sensor
+noise that's otherwise visible as salt-and-pepper "static" even on
+perfectly clear pixels.
 
 Usage: python3 scripts/fetch_landsat_lst.py
 Output: public/layers/surface-temperature.png
@@ -23,17 +29,28 @@ import numpy as np
 import planetary_computer
 import rasterio
 from matplotlib import pyplot as plt
-from matplotlib.colors import Normalize
+from matplotlib.colors import LinearSegmentedColormap, Normalize
 from pystac_client import Client
 from rasterio.warp import transform_bounds
 from rasterio.windows import bounds as window_bounds
 from rasterio.windows import from_bounds
+from scipy.ndimage import distance_transform_edt, median_filter
 
 STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
 COLLECTION = "landsat-c2-l2"
 ST_B10_ASSET = "lwir11"  # Planetary Computer's key for the ST_B10 band
-QA_PIXEL_ASSET = "qa_pixel"  # bit 7 = water, used to exclude water from the stretch
-COLORMAP = "inferno"  # swap to "magma" if preferred
+QA_PIXEL_ASSET = "qa_pixel"
+
+# QA_PIXEL bit meanings (Landsat Collection 2 Level-2)
+WATER_BIT = 7
+BAD_QA_BITS = (1, 2, 3, 4)  # dilated cloud, cirrus, cloud, cloud shadow
+
+MEDIAN_FILTER_SIZE = 3  # small — denoise without misrepresenting resolution
+
+# Diverging blue -> warm cream -> deep red, replacing inferno so cold/hot
+# read intuitively and the midtone matches this app's warm-neutral palette.
+COLOR_STOPS = ["#2C6E9E", "#8FB8D9", "#EDE4CF", "#E2924D", "#A6281E"]
+CMAP = LinearSegmentedColormap.from_list("blue_cream_red", COLOR_STOPS, N=256)
 
 # west, south, east, north — Collin/Denton/Dallas/Tarrant counties (DFW metro)
 BBOX = (-97.65, 32.55, -96.35, 33.47)
@@ -122,16 +139,36 @@ def main():
 
     with rasterio.open(signed.assets[QA_PIXEL_ASSET].href) as src:
         qa = src.read(1, window=window)
-    is_water = ((qa >> 7) & 1).astype(bool)  # QA_PIXEL bit 7 = water
+    is_water = ((qa >> WATER_BIT) & 1).astype(bool)
+    is_bad = np.zeros(qa.shape, dtype=bool)
+    for bit in BAD_QA_BITS:
+        is_bad |= ((qa >> bit) & 1).astype(bool)
 
     fahrenheit = dn_to_fahrenheit(dn)
-    land_valid = valid & ~is_water
-    min_f, max_f = np.percentile(fahrenheit[land_valid], [5, 95])
+
+    # Percentile stats from only trustworthy pixels — water and contaminated
+    # (cloud/shadow/cirrus) pixels excluded, computed before any fill/smoothing.
+    good_for_stats = valid & ~is_water & ~is_bad
+    min_f, max_f = np.percentile(fahrenheit[good_for_stats], [5, 95])
     min_f, max_f = float(min_f), float(max_f)
+    print(f"Masked out for stats: water {100 * is_water[valid].mean():.1f}%, "
+          f"cloud/shadow/cirrus {100 * is_bad[valid].mean():.1f}%")
+
+    # Fill contaminated (but not truly-missing) pixels from their nearest
+    # good neighbor, so they don't render as holes or noisy garbage.
+    needs_fill = is_bad & valid
+    untrustworthy_source = needs_fill | ~valid
+    nearest_good_idx = distance_transform_edt(
+        untrustworthy_source, return_distances=False, return_indices=True
+    )
+    fahrenheit_filled = np.where(needs_fill, fahrenheit[tuple(nearest_good_idx)], fahrenheit)
+
+    # Small median filter to remove per-pixel thermal-sensor noise that
+    # otherwise looks like static even on unflagged, perfectly clear pixels.
+    fahrenheit_smoothed = median_filter(fahrenheit_filled, size=MEDIAN_FILTER_SIZE)
 
     norm = Normalize(vmin=min_f, vmax=max_f, clip=True)
-    cmap = plt.get_cmap(COLORMAP)
-    rgba = cmap(norm(fahrenheit))
+    rgba = CMAP(norm(fahrenheit_smoothed))
     rgba[..., 3] = np.where(valid, 1.0, 0.0)  # transparent nodata pixels
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)

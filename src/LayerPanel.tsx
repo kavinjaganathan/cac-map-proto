@@ -12,8 +12,8 @@ const COLOR_BORDER = '#C9BEA9'
 const COLOR_TEXT = '#2B2620'
 const COLOR_ACCENT = '#B5804A'
 
-// Approximate stops sampled from matplotlib's inferno colormap.
-const INFERNO_GRADIENT = 'linear-gradient(to right, #000004, #56106e, #bc3754, #f98c0a, #fcffa4)'
+// Must match COLOR_STOPS in scripts/fetch_landsat_lst.py.
+const TEMPERATURE_GRADIENT = 'linear-gradient(to right, #2C6E9E, #8FB8D9, #EDE4CF, #E2924D, #A6281E)'
 
 const SURFACE_TEMPERATURE_ID = 'surface-temperature'
 
@@ -82,7 +82,7 @@ function LayerPanel({ mapRef }: { mapRef: RefObject<MapLibreMap | null> }) {
           </label>
           {layer.id === SURFACE_TEMPERATURE_ID && enabled[layer.id] && surfaceTempMeta && (
             <div style={{ padding: '4px 2px 8px' }}>
-              <div style={{ height: 8, borderRadius: 4, background: INFERNO_GRADIENT }} />
+              <div style={{ height: 8, borderRadius: 4, background: TEMPERATURE_GRADIENT }} />
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
                 <span>{surfaceTempMeta.minF}°F</span>
                 <span>{surfaceTempMeta.maxF}°F</span>
