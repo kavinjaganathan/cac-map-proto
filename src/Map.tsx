@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Map as MapLibreMap } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 
-const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty'
+const STYLE_URL = 'https://tiles.openfreemap.org/styles/positron'
 const USA_CENTER: [number, number] = [-98.35, 39.5]
 const USA_ZOOM = 3.8
 
