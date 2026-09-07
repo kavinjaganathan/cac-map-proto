@@ -27,8 +27,8 @@ COLLECTION = "landsat-c2-l2"
 ST_B10_ASSET = "lwir11"  # Planetary Computer's key for the ST_B10 band
 COLORMAP = "inferno"  # swap to "magma" if preferred
 
-# west, south, east, north — Frisco, TX
-BBOX = (-96.90, 33.05, -96.75, 33.20)
+# west, south, east, north — Collin/Denton/Dallas/Tarrant counties (DFW metro)
+BBOX = (-97.65, 32.55, -96.35, 33.47)
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "public" / "layers"
 OUT_PNG = OUT_DIR / "surface-temperature.png"
@@ -39,6 +39,33 @@ def dn_to_fahrenheit(dn: np.ndarray) -> np.ndarray:
     kelvin = dn.astype("float64") * 0.00341802 + 149.0
     celsius = kelvin - 273.15
     return celsius * 9.0 / 5.0 + 32.0
+
+
+def point_in_polygon(point, ring):
+    x, y = point
+    inside = False
+    n = len(ring)
+    for i in range(n):
+        xi, yi = ring[i]
+        xj, yj = ring[i - 1]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+            inside = not inside
+    return inside
+
+
+def bbox_fully_covered(item, bbox) -> bool:
+    """A bbox search only requires intersection, not full coverage — an
+    adjacent Landsat path/row can overlap just a corner. Check that the
+    scene's actual footprint polygon contains every corner (and edge
+    midpoints, in case of a concave/rotated footprint) of our bbox."""
+    ring = item.geometry["coordinates"][0]
+    west, south, east, north = bbox
+    mid_lon, mid_lat = (west + east) / 2, (south + north) / 2
+    test_points = [
+        (west, south), (east, south), (east, north), (west, north),
+        (mid_lon, south), (mid_lon, north), (west, mid_lat), (east, mid_lat),
+    ]
+    return all(point_in_polygon(p, ring) for p in test_points)
 
 
 def find_scene():
@@ -52,11 +79,15 @@ def find_scene():
             "platform": {"in": ["landsat-8", "landsat-9"]},
         },
         sortby=[{"field": "properties.datetime", "direction": "desc"}],
-        max_items=1,
+        max_items=50,
     )
-    items = list(search.items())
+    items = [item for item in search.items() if bbox_fully_covered(item, BBOX)]
     if not items:
-        raise RuntimeError("No cloud-free Landsat scene found for the given bbox/date range")
+        raise RuntimeError(
+            "No single cloud-free Landsat scene fully covers the requested bbox "
+            "(a bbox search can match scenes that only overlap part of it) — "
+            "shrink the bbox or widen the date range"
+        )
     return items[0]
 
 

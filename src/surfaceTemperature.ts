@@ -39,7 +39,9 @@ export async function addSurfaceTemperatureLayer(
       id: LAYER_ID,
       type: 'raster',
       source: SOURCE_ID,
-      paint: { 'raster-opacity': 0.75 },
+      // Landsat pixels are ~30m — bilinear (the default) smooths that into
+      // a hazy blur; nearest shows the true blocky resolution instead.
+      paint: { 'raster-opacity': 0.75, 'raster-resampling': 'nearest' },
     })
   }
 
