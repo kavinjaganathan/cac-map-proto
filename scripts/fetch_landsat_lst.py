@@ -1,34 +1,27 @@
 """
 Fetches a recent, cloud-free Landsat 8/9 Collection 2 Level-2 scene over
 the DFW metro area from Microsoft Planetary Computer's STAC API, converts
-the surface temperature band (ST_B10) to Fahrenheit, colorizes it, and
-writes a PNG + bounds/metadata JSON for the web app to load as a map
-overlay.
+the surface temperature band (ST_B10) to Fahrenheit, and writes it as a
+data PNG + bounds/metadata JSON for the web app.
 
-The color scale is stretched to the 5th-95th percentile of land pixels
-(water and cloud/shadow/cirrus excluded via QA_PIXEL, see BAD_QA_BITS)
-rather than the raw min/max — water and contaminated/outlier pixels
-otherwise compress the real ~30F of land variation into a sliver of the
-colormap, making everything look like one flat color.
+The output is temperature values, not colors — the web app colors pixels
+at or above HOTSPOT_THRESHOLD_F (src/heatConfig.ts) at load time, so the
+threshold can be changed without rerunning this script.
 
-Cloud/shadow/cirrus-flagged pixels are filled from their nearest good
-neighbor (a standard sparse-gap inpainting trick) rather than left as
-visible holes, and a 3x3 median filter removes per-pixel thermal-sensor
-noise that's otherwise visible as salt-and-pepper "static" even on
-perfectly clear pixels.
+Cloud/shadow/cirrus-flagged pixels (QA_PIXEL, see BAD_QA_BITS) are filled
+from their nearest good neighbor before a 3x3 median filter removes
+per-pixel thermal-sensor noise (otherwise visible as salt-and-pepper
+"static" even on perfectly clear pixels) — the fill keeps cloud values
+from bleeding into their neighbors through the filter. The filled pixels
+themselves aren't real readings, so they're still marked no-data.
 
-A second PNG (surface-temperature-data.png) encodes the actual Fahrenheit
-values (not colors) for the click-to-inspect feature — 16 bits packed
-into the R+G channels over a fixed scale, alpha 0/255 marking no-data
-(true nodata or cloud/shadow/cirrus — those are filled with an
-interpolated value for the color display, but that's not a real
-measurement, so the inspect tool should say "no data" rather than show
-it as one). Downsampled by DATA_DOWNSAMPLE_STRIDE to keep the file small
-— see that constant for why.
+Encoding: 16 bits packed into R+G over a fixed scale (DATA_SCALE_MIN_F to
+DATA_SCALE_MAX_F), alpha 0/255 marking no-data (true nodata or
+cloud/shadow/cirrus). Downsampled by DATA_DOWNSAMPLE_STRIDE to keep the
+file small — see that constant for why.
 
 Usage: python3 scripts/fetch_landsat_lst.py
-Output: public/layers/surface-temperature.png
-        public/layers/surface-temperature-data.png
+Output: public/layers/surface-temperature-data.png
         public/layers/surface-temperature.json
 """
 
@@ -39,7 +32,6 @@ import numpy as np
 import planetary_computer
 import rasterio
 from matplotlib import pyplot as plt
-from matplotlib.colors import LinearSegmentedColormap, Normalize
 from pystac_client import Client
 from rasterio.warp import transform_bounds
 from rasterio.windows import bounds as window_bounds
@@ -52,29 +44,22 @@ ST_B10_ASSET = "lwir11"  # Planetary Computer's key for the ST_B10 band
 QA_PIXEL_ASSET = "qa_pixel"
 
 # QA_PIXEL bit meanings (Landsat Collection 2 Level-2)
-WATER_BIT = 7
 BAD_QA_BITS = (1, 2, 3, 4)  # dilated cloud, cirrus, cloud, cloud shadow
 
 MEDIAN_FILTER_SIZE = 3  # small — denoise without misrepresenting resolution
-
-# Diverging blue -> warm cream -> deep red, replacing inferno so cold/hot
-# read intuitively and the midtone matches this app's warm-neutral palette.
-COLOR_STOPS = ["#2C6E9E", "#8FB8D9", "#EDE4CF", "#E2924D", "#A6281E"]
-CMAP = LinearSegmentedColormap.from_list("blue_cream_red", COLOR_STOPS, N=256)
 
 # west, south, east, north — Collin/Denton/Dallas/Tarrant counties (DFW metro)
 BBOX = (-97.65, 32.55, -96.35, 33.47)
 
 OUT_DIR = Path(__file__).resolve().parent.parent / "public" / "layers"
-OUT_PNG = OUT_DIR / "surface-temperature.png"
 OUT_DATA_PNG = OUT_DIR / "surface-temperature-data.png"
 OUT_JSON = OUT_DIR / "surface-temperature.json"
 
-# A full-resolution data PNG (same grid as the color image) compresses to
-# ~22MB and fully rewrites on every regen — real repo bloat for a click
-# tool. Stride 8 (~230m cells) is still finer than the ~90m effective
-# resolution the median filter already implies, at ~500KB.
-DATA_DOWNSAMPLE_STRIDE = 8
+# Full resolution (30m) compresses to ~22MB and fully rewrites on every
+# regen — real repo bloat. Stride 2 (60m cells) is still finer than the
+# ~90m effective resolution the median filter already implies, and is
+# what the browser colors and the click-to-inspect popup reads.
+DATA_DOWNSAMPLE_STRIDE = 2
 DATA_SCALE_MIN_F = -40.0
 DATA_SCALE_MAX_F = 200.0
 
@@ -86,9 +71,9 @@ def dn_to_fahrenheit(dn: np.ndarray) -> np.ndarray:
 
 
 def write_data_png(path, fahrenheit: np.ndarray, good: np.ndarray) -> tuple[int, int]:
-    """Encodes real Fahrenheit values (not colors) into a PNG for the
-    click-to-inspect feature: 16 bits packed into R+G over a fixed scale,
-    alpha 0/255 marking no-data. Returns (width, height) of the grid."""
+    """Encodes real Fahrenheit values (not colors) into a PNG: 16 bits
+    packed into R+G over a fixed scale, alpha 0/255 marking no-data.
+    Returns (width, height) of the grid."""
     small_f = fahrenheit[::DATA_DOWNSAMPLE_STRIDE, ::DATA_DOWNSAMPLE_STRIDE]
     small_good = good[::DATA_DOWNSAMPLE_STRIDE, ::DATA_DOWNSAMPLE_STRIDE]
 
@@ -179,23 +164,17 @@ def main():
 
     with rasterio.open(signed.assets[QA_PIXEL_ASSET].href) as src:
         qa = src.read(1, window=window)
-    is_water = ((qa >> WATER_BIT) & 1).astype(bool)
     is_bad = np.zeros(qa.shape, dtype=bool)
     for bit in BAD_QA_BITS:
         is_bad |= ((qa >> bit) & 1).astype(bool)
 
     fahrenheit = dn_to_fahrenheit(dn)
 
-    # Percentile stats from only trustworthy pixels — water and contaminated
-    # (cloud/shadow/cirrus) pixels excluded, computed before any fill/smoothing.
-    good_for_stats = valid & ~is_water & ~is_bad
-    min_f, max_f = np.percentile(fahrenheit[good_for_stats], [5, 95])
-    min_f, max_f = float(min_f), float(max_f)
-    print(f"Masked out for stats: water {100 * is_water[valid].mean():.1f}%, "
-          f"cloud/shadow/cirrus {100 * is_bad[valid].mean():.1f}%")
+    print(f"Cloud/shadow/cirrus: {100 * is_bad[valid].mean():.1f}% of pixels")
 
     # Fill contaminated (but not truly-missing) pixels from their nearest
-    # good neighbor, so they don't render as holes or noisy garbage.
+    # good neighbor, so cloud values don't bleed into real readings through
+    # the median filter below. They're still marked no-data in the output.
     needs_fill = is_bad & valid
     untrustworthy_source = needs_fill | ~valid
     nearest_good_idx = distance_transform_edt(
@@ -207,27 +186,15 @@ def main():
     # otherwise looks like static even on unflagged, perfectly clear pixels.
     fahrenheit_smoothed = median_filter(fahrenheit_filled, size=MEDIAN_FILTER_SIZE)
 
-    norm = Normalize(vmin=min_f, vmax=max_f, clip=True)
-    rgba = CMAP(norm(fahrenheit_smoothed))
-    rgba[..., 3] = np.where(valid, 1.0, 0.0)  # transparent nodata pixels
-
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    plt.imsave(OUT_PNG, rgba)
-
-    # Water is a real measurement (only excluded from the percentile stats
-    # above, not from the data itself) so it's "good" for the inspect tool;
-    # cloud/shadow/cirrus pixels were only filled for the color display and
-    # aren't real readings, so they stay excluded here.
-    good_for_inspect = valid & ~is_bad
-    data_width, data_height = write_data_png(OUT_DATA_PNG, fahrenheit_smoothed, good_for_inspect)
+    good = valid & ~is_bad
+    data_width, data_height = write_data_png(OUT_DATA_PNG, fahrenheit_smoothed, good)
 
     metadata = {
         "west": out_west,
         "south": out_south,
         "east": out_east,
         "north": out_north,
-        "minF": round(min_f, 1),
-        "maxF": round(max_f, 1),
         "sceneDate": item.properties["datetime"],
         "dataWidth": data_width,
         "dataHeight": data_height,
@@ -236,8 +203,10 @@ def main():
     }
     OUT_JSON.write_text(json.dumps(metadata, indent=2))
 
-    print(f"Wrote {OUT_PNG}, {OUT_DATA_PNG} ({data_width}x{data_height}), and {OUT_JSON}")
-    print(f"Range (land, 5th-95th percentile): {metadata['minF']}F - {metadata['maxF']}F")
+    print(f"Wrote {OUT_DATA_PNG} ({data_width}x{data_height}) and {OUT_JSON}")
+    good_f = fahrenheit_smoothed[good]
+    for threshold in (110, 115, 120, 125):
+        print(f"  at/above {threshold}F: {100 * (good_f >= threshold).mean():.0f}% of pixels")
 
 
 if __name__ == "__main__":

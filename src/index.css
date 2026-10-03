@@ -5,3 +5,45 @@ body,
   height: 100%;
   margin: 0;
 }
+
+/* Map control chrome — white rounded boxes to match the tabs, search bar
+   and legend. */
+.maplibregl-map .maplibregl-ctrl-top-right {
+  /* Clears the layer tabs above (16px inset + 48px tab bar + 12px gap). */
+  top: 76px;
+  right: 6px;
+}
+
+/* Tabs drop below the search bar at this width — see LayerPanel.tsx. */
+@media (max-width: 760px) {
+  .maplibregl-map .maplibregl-ctrl-top-right {
+    top: 132px;
+  }
+}
+
+.maplibregl-map .maplibregl-ctrl-group:not(:empty) {
+  border-radius: 10px;
+  box-shadow: 0 2px 8px #2b262026;
+}
+
+.maplibregl-map .maplibregl-ctrl-group button {
+  width: 36px;
+  height: 36px;
+}
+
+.maplibregl-map .maplibregl-ctrl-group button:first-child {
+  border-radius: 10px 10px 0 0;
+}
+
+.maplibregl-map .maplibregl-ctrl-group button:last-child {
+  border-radius: 0 0 10px 10px;
+}
+
+.maplibregl-map .maplibregl-ctrl-group button:only-child {
+  border-radius: 10px;
+}
+
+.maplibregl-map .maplibregl-ctrl-scale {
+  border-radius: 0 0 4px 4px;
+  font-family: 'Public Sans', system-ui, sans-serif;
+}
